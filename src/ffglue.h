@@ -30,6 +30,7 @@ typedef struct FgInfo
     int     threads;            /* video decode threads in use */
     int     frameThreading;     /* 1 frame, 2 slice, 0 none */
     int     profile, level, refs;
+    double  pixelAspect;        /* width:height of one pixel as the file wants it shown; 0 if unknown */
 } FgInfo;
 
 /* Decoded picture, always YUV 4:2:0 planar; pointers valid until the next decode call. */

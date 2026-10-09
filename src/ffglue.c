@@ -88,7 +88,7 @@ static AVCodecContext* OpenDecoder( AVStream* st, int isVideo )
     if( isVideo && g_log )
     {
         char line[200];
-        sprintf_s( line, "fg_open: video decoder %s, %d threads, active threading %s, profile %d level %d, refs %d, "
+        sprintf_s( line, sizeof( line ), "fg_open: video decoder %s, %d threads, active threading %s, profile %d level %d, refs %d, "
                    "b-frames %d, %s\n", codec->name, ctx->thread_count,
                    ctx->active_thread_type == FF_THREAD_FRAME ? "frame" :
                    ctx->active_thread_type == FF_THREAD_SLICE ? "slice" : "none",
@@ -239,6 +239,11 @@ void fg_get_info( FgMedia* m, FgInfo* info )
         info->refs = m->vctx->refs;
         if( st->r_frame_rate.den )
             info->fps = av_q2d( st->r_frame_rate );
+        /* The container's value wins (MKV display size), as in ffplay. */
+        if( st->sample_aspect_ratio.num > 0 && st->sample_aspect_ratio.den > 0 )
+            info->pixelAspect = av_q2d( st->sample_aspect_ratio );
+        else if( m->vctx->sample_aspect_ratio.num > 0 && m->vctx->sample_aspect_ratio.den > 0 )
+            info->pixelAspect = av_q2d( m->vctx->sample_aspect_ratio );
     }
     if( m->actx )
     {

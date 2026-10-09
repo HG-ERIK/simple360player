@@ -130,8 +130,21 @@ private:
     int                        m_frameW, m_frameH;
     int                        m_frameColorspace, m_frameFullRange;
     float                      m_brightness;    // added to luma, for dark transfers (-0.1..0.2)
+    int                        m_aspect;        // ASPECT_*
+    double                     m_pixelAspect;   // the file's pixel shape (anamorphic DVDs), 1 = square
+    float                      m_tvAspect;      // 16:9 or 4:3, from the console's display setting
+    bool                       m_screenSaverOff;
+
+    void   KeepScreenAwake( bool awake );
 
 public:
+    // Auto keeps the picture's shape on the TV (4:3 sets included); Zoom fills the screen
+    // and crops; Stretch fills it and distorts; 4:3 / 16:9 force the picture's shape.
+    enum { ASPECT_AUTO, ASPECT_ZOOM, ASPECT_STRETCH, ASPECT_4_3, ASPECT_16_9, ASPECT_COUNT };
+    static const wchar_t* AspectName( int mode );
+    void   SetAspect( int mode )    { m_aspect = mode >= 0 && mode < ASPECT_COUNT ? mode : ASPECT_AUTO; }
+    int    Aspect() const           { return m_aspect; }
+
     void   SetBrightness( float b ) { m_brightness = b; }
     float  Brightness() const       { return m_brightness; }
     std::wstring ColorInfo() const;
@@ -204,6 +217,7 @@ private:
     int                        m_catchLevel;    // fg_set_fast level in use (video thread)
     volatile double            m_seekFloor;     // after a seek: frames and sound before this are skipped
     volatile LONG              m_reachingFloor; // video is still decoding its way up to m_seekFloor
+    volatile LONG              m_connectionLost; // reconnecting gave up: the end is an error, not the film's end
     bool                       m_speedTest;
     DWORD                      m_statsTick;
 };

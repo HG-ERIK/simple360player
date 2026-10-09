@@ -60,6 +60,7 @@ public:
     virtual MenuMove     Choose( int page, int sel ) = 0;
     virtual MenuMove     Back( int page ) = 0;
     virtual void         SliderStep( int page, int step ) {}
+    virtual void         AspectChanged() {}                 // X changed the aspect mode: save it
 };
 
 // The playback screen shared by both apps: timeline, seeking, options menu, stats.
@@ -79,6 +80,7 @@ private:
     void RenderMenu();
     void RenderStats( float renderMs );
     void CommitSeek();
+    void Notice( const std::wstring& text );
 
     FFPlayer*   m_player;
     Font*       m_font;
@@ -103,4 +105,7 @@ private:
     long        m_statsShown;
     __int64     m_statsBytes;
     float       m_displayFps, m_mbps;
+
+    std::wstring m_notice;                  // e.g. "Aspect ratio: Zoom", top of the screen for a moment
+    DWORD       m_noticeTick;
 };

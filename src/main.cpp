@@ -86,7 +86,7 @@ class PlexApp : public App, public PlayerHost
 {
 public:
     PlexApp() : m_client( NULL ), m_sessionReady( false ), m_timelineTick( 0 ), m_lastPosition( 0 ),
-                m_transcoding( false ), m_restarting( false ), m_startGeneration( 0 ), m_menuHeight( 720 ),
+                m_transcoding( false ), m_restarting( false ), m_reconnects( 0 ), m_startGeneration( 0 ), m_menuHeight( 720 ),
                 m_qualityMode( QUALITY_AUTO ), m_qualityPreset( 1 ), m_burnSubs( false ), m_frameStart( 0 ),
                 m_renderMs( 0 ), m_thread( NULL ), m_notify( NULL ), m_busy( false ) {}
 
@@ -158,6 +158,7 @@ private:
     // While the stream (re)starts the player screen stays up with a message.
     void         RestartPlayback( double position, bool selectStreams, const std::wstring& message );
     bool               m_restarting;
+    int                m_reconnects;        // automatic restarts after a lost connection, this video
     int                m_startGeneration;   // bumps on every start/cancel; stale callbacks see a different value
     std::wstring       m_restartMessage;
 
@@ -178,10 +179,11 @@ private:
     virtual MenuMove     Choose( int page, int sel );
     virtual MenuMove     Back( int page );
     virtual void         SliderStep( int page, int step );
+    virtual void         AspectChanged();
 
     // Options menu pages.
-    enum { PAGE_MAIN, PAGE_QUALITY, PAGE_BITRATE, PAGE_AUDIO, PAGE_SUBS, PAGE_BRIGHTNESS };
-    enum { ROW_QUALITY, ROW_AUDIO, ROW_SUBS, ROW_BRIGHTNESS, ROW_STATS };
+    enum { PAGE_MAIN, PAGE_QUALITY, PAGE_BITRATE, PAGE_AUDIO, PAGE_SUBS, PAGE_BRIGHTNESS, PAGE_ASPECT };
+    enum { ROW_QUALITY, ROW_AUDIO, ROW_SUBS, ROW_BRIGHTNESS, ROW_ASPECT, ROW_STATS };
     enum { QUALITY_AUTO, QUALITY_ORIGINAL, QUALITY_PRESET };
     std::vector<int> TrackList( int streamType ) const;   // indexes into m_playMedia.streams; -1 = subtitles off
     std::wstring TrackName( int streamType ) const;
@@ -621,6 +623,15 @@ HRESULT PlexApp::Update()
     if( !m_playKey.empty() )
     {
         // Playback ended (finished, stopped or failed).
+        if( m_player.Failed() && m_player.Error() == "Connection lost" && m_reconnects < 5 )
+        {
+            // The player's own reconnecting gave up (~20 s); start the stream again from there.
+            double pos = m_player.Position();
+            ++m_reconnects;
+            Log::Write( "Connection lost at %.1f s, restarting (%d)", pos, m_reconnects );
+            RestartPlayback( pos, false, L"Connection lost, reconnecting..." );
+            return S_OK;
+        }
         if( m_player.Failed() )
         {
             Log::Write( "Playback gave up: %s", m_player.Error().c_str() );
@@ -802,6 +813,7 @@ void PlexApp::StartPlayback( const std::string& key, const Plex::Media& media, d
     Log::Write( "Playback decision: %s (quality mode %d, burn subtitles %d, server %ls)",
                 m_transcoding ? "transcode" : "direct", m_qualityMode, m_burnSubs ? 1 : 0, m_serverLabel.c_str() );
     m_player.SetBrightness( m_settings.brightness * 0.02f );
+    m_player.SetAspect( m_settings.aspect );
     m_timelineTick = GetTickCount();
     if( !m_transcoding )
     {
@@ -914,6 +926,7 @@ void PlexApp::PlayItem( const Plex::Item& item, double start )
         return;
     m_job.offset = start;
     m_qualityMode = QUALITY_AUTO;    // per-video choice from the options menu
+    m_reconnects = 0;
     StartJob( Job::MEDIA, "/library/metadata/" + item.ratingKey, item.title );
 }
 
@@ -932,6 +945,7 @@ void PlexApp::ReportTimeline( const char* state )
 void PlexApp::ApplySettings()
 {
     m_player.SetBrightness( m_settings.brightness * 0.02f );
+    m_player.SetAspect( m_settings.aspect );
 }
 
 void PlexApp::SignOut()
@@ -1173,6 +1187,8 @@ void PlexApp::BuildMenu( int page, MenuPage& out )
         e.label = L"Subtitles";  e.value = TrackName( 3 ); out.entries.push_back( e );
         swprintf_s( buf, L"%+d", m_settings.brightness );
         e.label = L"Brightness"; e.value = buf;            out.entries.push_back( e );
+        e.label = L"Aspect ratio"; e.value = FFPlayer::AspectName( m_settings.aspect ); out.entries.push_back( e );
+        e.label = L"Aspect ratio"; e.value = FFPlayer::AspectName( m_settings.aspect ); out.entries.push_back( e );
         e.opens = false;
         e.label = L"Stats for nerds"; e.value = m_settings.stats ? L"On" : L"Off"; out.entries.push_back( e );
         break;
@@ -1249,6 +1265,16 @@ void PlexApp::BuildMenu( int page, MenuPage& out )
         out.minValue = -5;
         out.maxValue = 10;
         break;
+
+    case PAGE_ASPECT:
+        out.title = L"Aspect ratio";
+        for( int i = 0; i < FFPlayer::ASPECT_COUNT; ++i )
+        {
+            e.label = FFPlayer::AspectName( i );
+            e.checked = i == m_settings.aspect;
+            out.entries.push_back( e );
+        }
+        break;
     }
 }
 
@@ -1283,6 +1309,8 @@ MenuMove PlexApp::Choose( int page, int sel )
             }
         case ROW_BRIGHTNESS:
             return MenuMove::Open( PAGE_BRIGHTNESS, 0 );
+        case ROW_ASPECT:
+            return MenuMove::Open( PAGE_ASPECT, m_settings.aspect );
         case ROW_STATS:
             m_settings.stats = !m_settings.stats;
             m_settings.Save( "game:\\settings.ini" );
@@ -1352,8 +1380,19 @@ MenuMove PlexApp::Choose( int page, int sel )
                 RestartPlayback( pos, true, type == 2 ? L"Changing audio..." : L"Changing subtitles..." );
             return MenuMove::Close();
         }
+
+    case PAGE_ASPECT:
+        m_player.SetAspect( sel );
+        AspectChanged();
+        return MenuMove::Close();
     }
     return MenuMove::Stay();
+}
+
+void PlexApp::AspectChanged()
+{
+    m_settings.aspect = m_player.Aspect();
+    m_settings.Save( "game:\\settings.ini" );
 }
 
 MenuMove PlexApp::Back( int page )
@@ -1369,6 +1408,7 @@ MenuMove PlexApp::Back( int page )
     case PAGE_AUDIO:      return MenuMove::Open( PAGE_MAIN, ROW_AUDIO );
     case PAGE_SUBS:       return MenuMove::Open( PAGE_MAIN, ROW_SUBS );
     case PAGE_BRIGHTNESS: return MenuMove::Open( PAGE_MAIN, ROW_BRIGHTNESS );
+    case PAGE_ASPECT:     return MenuMove::Open( PAGE_MAIN, ROW_ASPECT );
     }
     return MenuMove::Close();
 }

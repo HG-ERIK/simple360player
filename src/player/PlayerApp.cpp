@@ -136,9 +136,10 @@ private:
     virtual MenuMove     Choose( int page, int sel );
     virtual MenuMove     Back( int page );
     virtual void         SliderStep( int page, int step );
+    virtual void         AspectChanged() { SaveSettings(); }
 
-    enum { PAGE_MAIN, PAGE_AUDIO, PAGE_SUBS, PAGE_BRIGHTNESS };
-    enum { ROW_AUDIO, ROW_SUBS, ROW_BRIGHTNESS, ROW_STATS };
+    enum { PAGE_MAIN, PAGE_AUDIO, PAGE_SUBS, PAGE_BRIGHTNESS, PAGE_ASPECT };
+    enum { ROW_AUDIO, ROW_SUBS, ROW_BRIGHTNESS, ROW_ASPECT, ROW_STATS };
     enum { SUB_OFF = -2, SUB_FILE = -1 };      // else an embedded track's container index
     std::vector<FgTrack> TracksOf( int type );
     std::wstring TrackLabel( const FgTrack& t ) const;
@@ -234,6 +235,7 @@ void PlayerApp::LoadSettings()
         if( k == "brightness" )   m_brightness = max( -5, min( 10, atoi( v.c_str() ) ) );
         else if( k == "stats" )   m_stats = v == "1";
         else if( k == "folder" )  m_dir = v;
+        else if( k == "aspect" )  m_player.SetAspect( atoi( v.c_str() ) );
     }
     fclose( f );
 }
@@ -243,7 +245,8 @@ void PlayerApp::SaveSettings()
     FILE* f = fopen( SETTINGS_PATH, "wb" );
     if( !f )
         return;
-    fprintf( f, "brightness=%d\r\nstats=%d\r\nfolder=%s\r\n", m_brightness, m_stats ? 1 : 0, m_dir.c_str() );
+    fprintf( f, "brightness=%d\r\nstats=%d\r\naspect=%d\r\nfolder=%s\r\n", m_brightness, m_stats ? 1 : 0,
+             m_player.Aspect(), m_dir.c_str() );
     fclose( f );
 }
 
@@ -607,6 +610,9 @@ void PlayerApp::BuildMenu( int page, MenuPage& out )
             e.label = L"Brightness";
             e.value = buf;
             out.entries.push_back( e );
+            e.label = L"Aspect ratio";
+            e.value = FFPlayer::AspectName( m_player.Aspect() );
+            out.entries.push_back( e );
             e.opens = false;
             e.label = L"Stats for nerds";
             e.value = m_stats ? L"On" : L"Off";
@@ -661,6 +667,16 @@ void PlayerApp::BuildMenu( int page, MenuPage& out )
         out.minValue = -5;
         out.maxValue = 10;
         break;
+
+    case PAGE_ASPECT:
+        out.title = L"Aspect ratio";
+        for( int i = 0; i < FFPlayer::ASPECT_COUNT; ++i )
+        {
+            e.label = FFPlayer::AspectName( i );
+            e.checked = i == m_player.Aspect();
+            out.entries.push_back( e );
+        }
+        break;
     }
 }
 
@@ -682,6 +698,8 @@ MenuMove PlayerApp::Choose( int page, int sel )
         }
         if( sel == ROW_BRIGHTNESS )
             return MenuMove::Open( PAGE_BRIGHTNESS, 0 );
+        if( sel == ROW_ASPECT )
+            return MenuMove::Open( PAGE_ASPECT, m_player.Aspect() );
         if( sel == ROW_STATS )
         {
             m_stats = !m_stats;
@@ -732,6 +750,11 @@ MenuMove PlayerApp::Choose( int page, int sel )
 
     case PAGE_BRIGHTNESS:
         return MenuMove::Open( PAGE_MAIN, ROW_BRIGHTNESS );
+
+    case PAGE_ASPECT:
+        m_player.SetAspect( sel );
+        SaveSettings();
+        return MenuMove::Close();
     }
     return MenuMove::Stay();
 }
@@ -743,6 +766,7 @@ MenuMove PlayerApp::Back( int page )
     case PAGE_AUDIO:      return MenuMove::Open( PAGE_MAIN, ROW_AUDIO );
     case PAGE_SUBS:       return MenuMove::Open( PAGE_MAIN, ROW_SUBS );
     case PAGE_BRIGHTNESS: return MenuMove::Open( PAGE_MAIN, ROW_BRIGHTNESS );
+    case PAGE_ASPECT:     return MenuMove::Open( PAGE_MAIN, ROW_ASPECT );
     }
     return MenuMove::Close();
 }

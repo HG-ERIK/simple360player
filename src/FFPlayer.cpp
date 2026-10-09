@@ -110,7 +110,8 @@ FFPlayer::FFPlayer()
       m_flushing( 0 ), m_decodersParked( 0 ), m_current( 0 ), m_stream( NULL ), m_subWanted( -1 ), m_subChanged( 0 ), m_file( INVALID_HANDLE_VALUE ), m_streamPos( 0 ),
       m_streamSize( -1 ), m_media( NULL ), m_hasAudio( false ), m_hasVideo( false ), m_lastShowTick( 0 ), m_duration( 0 ), m_startSeconds( 0 ), m_timeOffset( 0 ),
       m_active( false ), m_opened( 0 ), m_ended( 0 ), m_paused( false ), m_wallStart( 0 ), m_wallBase( 0 ),
-      m_lastPts( 0 ), m_decoded( 0 ), m_dropped( 0 ), m_shown( 0 ), m_catchups( 0 ), m_bytesRead( 0 ), m_skippingB( false ), m_catchLevel( 0 ), m_seekFloor( -1.0 ), m_reachingFloor( 0 ),m_speedTest( false ),
+      m_lastPts( 0 ), m_decoded( 0 ), m_dropped( 0 ), m_shown( 0 ), m_catchups( 0 ), m_bytesRead( 0 ), m_skippingB( false ), m_catchLevel( 0 ), m_seekFloor( -1.0 ), m_reachingFloor( 0 ), m_speedTest( false ),
+      m_aspect( ASPECT_AUTO ), m_pixelAspect( 1.0 ), m_tvAspect( 16.0f / 9.0f ), m_screenSaverOff( false ), m_connectionLost( 0 ),
       m_statsTick( 0 )
 {
     m_tex[0] = m_tex[1] = m_tex[2] = NULL;
@@ -223,6 +224,11 @@ void FFPlayer::Open( const std::vector<std::string>& urls, const std::vector<std
     m_skippingB = false;
     m_seekFloor = -1.0;
     m_reachingFloor = 0;
+    m_connectionLost = 0;
+    m_pixelAspect = 1.0;
+    XVIDEO_MODE mode;
+    XGetVideoMode( &mode );
+    m_tvAspect = mode.fIsWideScreen ? 16.0f / 9.0f : 4.0f / 3.0f;
     m_statsTick = GetTickCount();
     for( int i = 0; i < FRAME_COUNT; ++i )
         m_frames[i].ready = 0;
@@ -286,6 +292,7 @@ void FFPlayer::Stop()
         m_file = INVALID_HANDLE_VALUE;
     }
     m_active = false;
+    KeepScreenAwake( false );
     Log::Write( "Player stopped (decoded %ld, shown %ld, dropped %ld)", m_decoded, m_shown, m_dropped );
 }
 
@@ -305,7 +312,10 @@ int FFPlayer::SourceRead( void* opaque, unsigned char* buf, int size )
         p->m_bytesRead += got;
         return (int)got;
     }
-    for( int attempt = 0; attempt < 2; ++attempt )
+    // Dropped connection: reconnect at the same position, waiting longer each time
+    // (about 20 s in all) so a short Wi-Fi or internet hiccup doesn't end the film.
+    static const DWORD waits[] = { 0, 1000, 2000, 3000, 5000, 8000 };
+    for( int attempt = 0; ; ++attempt )
     {
         if( p->m_quit )
             return -1;
@@ -316,15 +326,26 @@ int FFPlayer::SourceRead( void* opaque, unsigned char* buf, int size )
             p->m_bytesRead += n;
             return n;
         }
-        if( p->m_quit )
-            return -1;
-        // Dropped connection: reconnect once at the same position.
-        Log::Write( "Stream read failed at %I64d, reconnecting", p->m_streamPos );
-        std::string err;
-        if( !p->m_stream->Open( p->m_urls[p->m_current], p->m_headers, p->m_streamPos, err ) )
-            return -1;
+        for( ;; )
+        {
+            if( attempt >= (int)( sizeof( waits ) / sizeof( waits[0] ) ) )
+            {
+                Log::Write( "Stream lost at %I64d, giving up", p->m_streamPos );
+                InterlockedExchange( &p->m_connectionLost, 1 );
+                return -1;
+            }
+            Log::Write( "Stream read failed at %I64d, reconnecting (try %d)", p->m_streamPos, attempt + 1 );
+            for( DWORD waited = 0; waited < waits[attempt] && !p->m_quit; waited += 100 )
+                Sleep( 100 );
+            if( p->m_quit )
+                return -1;
+            std::string err;
+            if( p->m_stream->Open( p->m_urls[p->m_current], p->m_headers, p->m_streamPos, err ) )
+                break;
+            Log::Write( "Reconnect failed: %s", err.c_str() );
+            ++attempt;
+        }
     }
-    return -1;
 }
 
 int FFPlayer::SourceSeek( void* opaque, __int64 pos )
@@ -439,6 +460,8 @@ bool FFPlayer::OpenMedia( std::string& error )
             m_duration = info.duration;
         m_hasAudio = info.hasAudio && m_xaudio;
         m_hasVideo = info.hasVideo != 0;
+        if( info.pixelAspect > 0.25 && info.pixelAspect < 4.0 )
+            m_pixelAspect = info.pixelAspect;
         wchar_t buf[160];
         swprintf_s( buf, L"%s %dx%d%s%s", Widen( info.videoCodec ).c_str(), info.width, info.height,
                     info.hasAudio ? L" / " : L"", Widen( info.audioCodec ).c_str() );
@@ -940,8 +963,24 @@ double FFPlayer::Position() const
 //--------------------------------------------------------------------------------------
 // Render thread
 //--------------------------------------------------------------------------------------
+void FFPlayer::KeepScreenAwake( bool awake )
+{
+    // The console dims the TV after ~10 minutes without controller input; not while a film plays.
+    if( awake == m_screenSaverOff )
+        return;
+    XEnableScreenSaver( awake ? FALSE : TRUE );
+    m_screenSaverOff = awake;
+}
+
+const wchar_t* FFPlayer::AspectName( int mode )
+{
+    static const wchar_t* const names[ASPECT_COUNT] = { L"Auto", L"Zoom", L"Stretch", L"4:3", L"16:9" };
+    return mode >= 0 && mode < ASPECT_COUNT ? names[mode] : names[0];
+}
+
 void FFPlayer::Update()
 {
+    KeepScreenAwake( m_active && m_opened && !m_paused );
     if( !m_active )
         return;
 
@@ -959,7 +998,13 @@ void FFPlayer::Update()
             pending = pending || m_frames[i].ready;
         if( !pending )
         {
-            Log::Write( "Playback finished" );
+            if( m_connectionLost )
+            {
+                m_error = "Connection lost";
+                Log::Write( "Playback stopped: connection lost at %.1f s", Position() );
+            }
+            else
+                Log::Write( "Playback finished" );
             Stop();
             return;
         }
@@ -1102,11 +1147,18 @@ void FFPlayer::RenderFrame( const D3DRECT& screen )
         return;
 
     float sw = (float)( screen.x2 - screen.x1 ), sh = (float)( screen.y2 - screen.y1 );
-    float aspect = (float)m_frameW / (float)m_frameH;
+    // The picture's shape on the TV, then in our 1280x720 buffer: a 4:3 TV squeezes the
+    // whole buffer into 4:3, so each buffer pixel shows narrower than it is tall.
+    float picture = (float)( m_frameW * m_pixelAspect / m_frameH );
+    if( m_aspect == ASPECT_4_3 )  picture = 4.0f / 3.0f;
+    if( m_aspect == ASPECT_16_9 ) picture = 16.0f / 9.0f;
+    float aspect = picture * ( sw / sh ) / m_tvAspect;
     float w = sw, h = sw / aspect;
-    if( h > sh )
-    {
+    if( m_aspect == ASPECT_STRETCH )
         h = sh;
+    else if( m_aspect == ASPECT_ZOOM ? h < sh : h > sh )
+    {
+        h = sh;             // Zoom: fill the height and crop the sides; else fit inside
         w = sh * aspect;
     }
     float x0 = ( sw - w ) / sw - 1.0f, x1 = x0 + 2.0f * w / sw;

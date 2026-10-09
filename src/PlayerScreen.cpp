@@ -33,7 +33,8 @@ PlayerScreen::PlayerScreen()
     : m_player( NULL ), m_font( NULL ), m_titleFont( NULL ), m_cpu( NULL ), m_host( NULL ), m_accent( 0xffe5a00d ),
       m_prevStick( 0 ), m_osdTick( 0 ), m_osdHidden( false ), m_seekPending( false ), m_seekTarget( 0 ),
       m_seekIdleTick( 0 ), m_holdDir( 0 ), m_holdStart( 0 ), m_holdLastTick( 0 ), m_menuOpen( false ), m_menuPage( 0 ),
-      m_menuSel( 0 ), m_statsTick( 0 ), m_statsShown( 0 ), m_statsBytes( 0 ), m_displayFps( 0 ), m_mbps( 0 )
+      m_menuSel( 0 ), m_statsTick( 0 ), m_statsShown( 0 ), m_statsBytes( 0 ), m_displayFps( 0 ), m_mbps( 0 ),
+      m_noticeTick( 0 )
 {
 }
 
@@ -63,6 +64,12 @@ void PlayerScreen::ShowFakeSeek( double target )
     m_seekPending = true;
     m_seekTarget = target;
     m_seekIdleTick = now;
+}
+
+void PlayerScreen::Notice( const std::wstring& text )
+{
+    m_notice = text;
+    m_noticeTick = GetTickCount();
 }
 
 void PlayerScreen::CommitSeek()
@@ -114,6 +121,14 @@ void PlayerScreen::Update( Pad* pad )
         m_holdDir = 0;
         m_menuPage = 0;
         m_menuSel = 0;
+        return;
+    }
+    if( pressed & XINPUT_GAMEPAD_X )
+    {
+        m_player->SetAspect( ( m_player->Aspect() + 1 ) % FFPlayer::ASPECT_COUNT );
+        Notice( std::wstring( L"Aspect ratio: " ) + FFPlayer::AspectName( m_player->Aspect() ) );
+        Log::Write( "Aspect mode %d", m_player->Aspect() );
+        m_host->AspectChanged();
         return;
     }
 
@@ -246,6 +261,20 @@ void PlayerScreen::Render( const D3DRECT& safe, float renderMs )
     m_host->DrawOverlay( visible ? (float)safe.y2 - 240.0f : (float)safe.y2 - 28.0f );
     if( m_host->ShowStats() )
         RenderStats( renderMs );
+    if( !m_notice.empty() && now - m_noticeTick < 2000 && !m_menuOpen )
+    {
+        float nw = 0, nh = 0;
+        m_titleFont->GetTextExtent( m_notice.c_str(), &nw, &nh );
+        float cx = 640, top = (float)safe.y1 + 10;
+        Draw::Rect( cx - nw / 2 - 24, top, cx + nw / 2 + 24, top + nh + 20, 0xC0000000 );
+        D3DRECT window;
+        m_titleFont->GetWindow( window );
+        m_titleFont->SetWindow( 0, 0, 1280, 720 );
+        m_titleFont->Begin();
+        m_titleFont->DrawText( cx, top + 10, COLOR_TEXT, m_notice.c_str(), FONT_CENTER_X );
+        m_titleFont->End();
+        m_titleFont->SetWindow( window );
+    }
     if( m_menuOpen )
     {
         RenderMenu();
@@ -327,7 +356,7 @@ void PlayerScreen::Render( const D3DRECT& safe, float renderMs )
         m_font->DrawText( width, ty - 74, COLOR_DIM, tag.c_str(), FONT_RIGHT );
     m_font->DrawText( 0, ty + 40, COLOR_DIM, m_seekPending ?
                       L"Left/Right  Move (hold = faster)      A  Jump here      B  Cancel" :
-                      L"Left/Right  Seek      A  Pause      LB/RB  5 min      Down  Hide      Y  Options      B  Back" );
+                      L"Left/Right  Seek      A  Pause      LB/RB  5 min      Down  Hide      X  Aspect      Y  Options      B  Back" );
     m_font->End();
 }
 

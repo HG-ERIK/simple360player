@@ -29,7 +29,8 @@ It only writes `settings.ini` and a log next to `default.xex`.
 | Left / Right | | Seek 10 s (hold to go faster) |
 | LB / RB | Page up / down | Seek 5 min |
 | Up / Down | Move | Show / hide the timeline |
-| Y | Refresh | Options: audio, subtitles, brightness, stats |
+| X | | Aspect ratio: Auto, Zoom, Stretch, 4:3, 16:9 |
+| Y | Refresh | Options: audio, subtitles, brightness, aspect ratio, stats |
 | Back | Exit | |
 
 ## Building
